@@ -1,0 +1,35 @@
+name: Deploy Bot to VDS
+
+on:
+  workflow_dispatch:  # Allows manual trigger from GitHub UI
+
+jobs:
+  deploy:
+    name: Deploy to VDS
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Deploy to VDS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          key: ${{ secrets.VDS_SSH_KEY }}
+          port: ${{ secrets.VDS_SSH_PORT || 22 }}
+          script: |
+            set -e  # Exit on error
+            cd /home/gordon/coding/lingualeo_bot
+            echo "📥 Pulling latest code from branch: ${{ github.ref_name }}"
+            git fetch origin
+            git reset --hard origin/${{ github.ref_name }}
+            echo "🔄 Restarting service..."
+            sudo systemctl restart lingualeo-bot.service
+            sleep 2
+            echo "✅ Checking service status..."
+            sudo systemctl status lingualeo-bot.service --no-pager || true
+            echo "✅ Deployment completed successfully!"
+            echo "📦 Branch deployed: ${{ github.ref_name }}"
+
