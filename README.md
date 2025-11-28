@@ -5,7 +5,6 @@ Utilities and bots for importing words into LinguaLeo vocabulary.
 ## Features
 
 - **Telegram Bot**: Add Spanish words to your LinguaLeo dictionary via Telegram chat
-- **Bulk Import Script**: Import words from JSON files
 - **Automatic Authentication**: Handles login and cookie caching automatically
 - **Smart Translation Matching**: Automatically selects the best translation from LinguaLeo suggestions
 - **Duplicate Prevention**: Automatically checks if a word already exists before adding it, preventing duplicates
@@ -18,11 +17,13 @@ Utilities and bots for importing words into LinguaLeo vocabulary.
 ├── lingualeo/            # Reusable LinguaLeo client module
 │   ├── __init__.py
 │   └── client.py
-├── data/
-│   └── words/            # Sample word JSON files
-├── examples/
-│   └── lingualeo/        # Original API request examples
-└── pyproject.toml        # Project dependencies (uv)
+├── .github/              # GitHub Actions workflows
+│   └── workflows/
+├── .pre-commit-config.yaml  # Pre-commit hooks configuration
+├── docker-compose.yml    # Docker Compose configuration
+├── Dockerfile            # Docker image definition
+├── pyproject.toml        # Project dependencies (uv)
+└── README.md             # This file
 ```
 
 ## Setup
@@ -58,6 +59,7 @@ Create a `.env` file with the following variables:
 ```bash
 # Required for Telegram bot
 TELEGRAM_TOKEN=your_telegram_bot_token_here
+TELEGRAM_AUTHORIZED_USER_ID=your_telegram_user_id_here
 
 # Required for LinguaLeo authentication
 LINGUALEO_EMAIL=your_email@example.com
@@ -229,10 +231,9 @@ The workflow will automatically pull the latest code and restart the bot on your
 - Delete `lingualeo_cookies.json` to force a fresh login
 - Check that your LinguaLeo account is active
 
-### Import script fails
-- Verify the JSON file format is correct
-- Check file path is correct (use absolute paths if needed)
-- Ensure you have write permissions for the cookie cache file
+### Cookie cache issues
+- Ensure you have write permissions for the cookie cache file (`lingualeo_cookies.json`)
+- Delete `lingualeo_cookies.json` to force a fresh login if authentication fails
 
 ## Development
 
