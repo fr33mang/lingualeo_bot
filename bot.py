@@ -10,12 +10,9 @@ Usage:
     python bot.py
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
@@ -51,7 +48,7 @@ def build_client() -> LinguaLeoClient:
     return client
 
 
-def parse_message_text(text: str) -> Tuple[str, Optional[str]]:
+def parse_message_text(text: str) -> tuple[str, str | None]:
     text = text.strip()
     if "—" in text:
         word, hint = text.split("—", 1)
@@ -62,7 +59,7 @@ def parse_message_text(text: str) -> Tuple[str, Optional[str]]:
     return text, None
 
 
-def parse_bulk_words(text: str) -> list[Tuple[str, Optional[str]]]:
+def parse_bulk_words(text: str) -> list[tuple[str, str | None]]:
     """Parse multiple words from a multi-line message."""
     lines = [line.strip() for line in text.strip().split("\n") if line.strip()]
     return [parse_message_text(line) for line in lines]
@@ -80,8 +77,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def process_single_word(
-    client: LinguaLeoClient, word: str, hint: Optional[str]
-) -> Tuple[bool, str, Optional[str], bool, Optional[str]]:
+    client: LinguaLeoClient, word: str, hint: str | None
+) -> tuple[bool, str, str | None, bool, str | None]:
     """
     Process a single word and return (success, word, translation_text, auto_selected, status_message).
     status_message: None if added, "exists" if already exists, "error" if failed.

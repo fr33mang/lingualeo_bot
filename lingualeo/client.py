@@ -6,7 +6,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Iterable
 
 import requests
 
@@ -59,8 +59,8 @@ class LinguaLeoError(RuntimeError):
     """Raised when a LinguaLeo operation cannot be completed."""
 
 
-def parse_cookie_string(raw: str) -> Dict[str, str]:
-    cookies: Dict[str, str] = {}
+def parse_cookie_string(raw: str) -> dict[str, str]:
+    cookies: dict[str, str] = {}
     for part in raw.split(";"):
         part = part.strip()
         if not part or "=" not in part:
@@ -98,13 +98,13 @@ def describe_request_error(exc: requests.RequestException) -> str:
 
 
 def select_best_translation(
-    candidates: Iterable[Dict[str, Any]],
-    desired: Optional[str],
-) -> Optional[Dict[str, Any]]:
+    candidates: Iterable[dict[str, Any]],
+    desired: str | None,
+) -> dict[str, Any] | None:
     if not desired:
         return None
     desired_lower = desired.lower()
-    best: Optional[Dict[str, Any]] = None
+    best: dict[str, Any] | None = None
     best_score = -1.0
     for candidate in candidates:
         text = str(candidate.get("value") or candidate.get("tr") or "").lower()
@@ -117,14 +117,14 @@ def select_best_translation(
     return best
 
 
-def _should_reauth(status_code: Optional[int]) -> bool:
+def _should_reauth(status_code: int | None) -> bool:
     return status_code in {400, 401, 403}
 
 
 @dataclass
 class AddWordResult:
-    response: Dict[str, Any]
-    translation_used: Dict[str, Any]
+    response: dict[str, Any]
+    translation_used: dict[str, Any]
     auto_selected: bool
 
 
@@ -132,9 +132,9 @@ class LinguaLeoClient:
     def __init__(
         self,
         *,
-        email: Optional[str] = None,
-        password: Optional[str] = None,
-        cookie_string: Optional[str] = None,
+        email: str | None = None,
+        password: str | None = None,
+        cookie_string: str | None = None,
         cookie_file: Path = COOKIE_CACHE_DEFAULT,
     ):
         if not email or not password:
@@ -166,13 +166,13 @@ class LinguaLeoClient:
         response.raise_for_status()
         _save_cookie_file(self.cookie_file, self.session.cookies)
 
-    def _call_get_translates(self, word: str) -> Dict[str, Any]:
+    def _call_get_translates(self, word: str) -> dict[str, Any]:
         payload = {"apiVersion": "1.0.1", "text": word, "iDs": []}
         response = self.session.post(GET_TRANSLATES_URL, json=payload, headers=self.headers, timeout=15)
         response.raise_for_status()
         return response.json()
 
-    def _call_get_words(self, word: str, word_set_id: int = 1) -> Dict[str, Any]:
+    def _call_get_words(self, word: str, word_set_id: int = 1) -> dict[str, Any]:
         """Search for a word in the dictionary."""
         # Generate simple tracking IDs (similar to what browser sends)
         timestamp = int(time.time() * 1000)
@@ -234,7 +234,7 @@ class LinguaLeoClient:
         )
         return result
 
-    def _call_set_words(self, word: str, translation: Dict[str, Any], word_set_id: int) -> Dict[str, Any]:
+    def _call_set_words(self, word: str, translation: dict[str, Any], word_set_id: int) -> dict[str, Any]:
         translation_block = {
             "id": translation["id"],
             "tr": translation.get("value") or translation.get("tr"),
@@ -273,7 +273,7 @@ class LinguaLeoClient:
             self.login()
             return func(*args, **kwargs)
 
-    def get_translates(self, word: str) -> Dict[str, Any]:
+    def get_translates(self, word: str) -> dict[str, Any]:
         self.ensure_authenticated()
         return self._with_reauth(self._call_get_translates, word)
 
@@ -354,14 +354,14 @@ class LinguaLeoClient:
             logger.error(f"Unexpected error while checking if word '{word}' exists: {exc}", exc_info=True)
             return False
 
-    def add_word(self, word: str, translation: Dict[str, Any], word_set_id: int = 1) -> Dict[str, Any]:
+    def add_word(self, word: str, translation: dict[str, Any], word_set_id: int = 1) -> dict[str, Any]:
         self.ensure_authenticated()
         return self._with_reauth(self._call_set_words, word, translation, word_set_id)
 
     def add_word_with_hint(
         self,
         word: str,
-        translation_hint: Optional[str],
+        translation_hint: str | None,
         word_set_id: int = 1,
     ) -> AddWordResult:
         # Check if word already exists before trying to add
