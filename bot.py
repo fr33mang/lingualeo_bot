@@ -14,13 +14,12 @@ import logging
 import os
 from pathlib import Path
 
-import requests
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from lingualeo import LinguaLeoClient, LinguaLeoError
-from lingualeo.client import COOKIE_CACHE_DEFAULT, describe_request_error
+from lingualeo.client import COOKIE_CACHE_DEFAULT
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,7 +27,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-def build_client() -> LinguaLeoClient:
+async def build_client() -> LinguaLeoClient:
     email = os.getenv("LINGUALEO_EMAIL")
     password = os.getenv("LINGUALEO_PASSWORD")
     cookie_file_env = os.getenv("LINGUALEO_COOKIE_FILE")
@@ -44,7 +43,7 @@ def build_client() -> LinguaLeoClient:
         cookie_string=cookie_string,
         cookie_file=cookie_file,
     )
-    client.ensure_authenticated()
+    await client.ensure_authenticated()
     return client
 
 
@@ -88,7 +87,7 @@ async def process_single_word(
     logger.info(f"[BOT] Processing word: '{word}' (hint: {hint})")
     try:
         logger.info(f"[BOT] Calling add_word_with_hint for '{word}'")
-        result = client.add_word_with_hint(word, hint)
+        result = await client.add_word_with_hint(word, hint)
         logger.info(f"[BOT] Successfully added word '{word}'")
         translation_text = result.translation_used.get("value") or result.translation_used.get("tr")
         return True, word, translation_text, result.auto_selected, None
@@ -99,9 +98,6 @@ async def process_single_word(
             logger.info(f"[BOT] ✓ Word '{word}' already exists in dictionary - preventing duplicate")
             return False, word, None, False, "exists"
         logger.exception(f"[BOT] Failed to add word '{word}': {exc}")
-        return False, word, None, False, "error"
-    except requests.RequestException as exc:
-        logger.exception(f"[BOT] RequestException for word '{word}': {exc}")
         return False, word, None, False, "error"
     except Exception as exc:
         logger.exception(f"[BOT] Unexpected exception for word '{word}': {exc}")
@@ -208,17 +204,30 @@ def main() -> None:
     if not token:
         raise SystemExit("TELEGRAM_TOKEN env variable is required.")
 
-    try:
-        client = build_client()
-    except LinguaLeoError as exc:
-        raise SystemExit(f"Failed to initialize LinguaLeo client: {exc}")
+    async def init_client():
+        try:
+            return await build_client()
+        except LinguaLeoError as exc:
+            raise SystemExit(f"Failed to initialize LinguaLeo client: {exc}")
 
-    application = Application.builder().token(token).build()
+    # Initialize client before starting the bot
+    # run_polling() will manage its own event loop, so we initialize client separately
+    import asyncio
+
+    client = asyncio.run(init_client())
+
+    # Register cleanup handler to close client on shutdown
+    async def post_shutdown(application: Application) -> None:
+        if client.client:
+            await client.close()
+
+    application = Application.builder().token(token).post_shutdown(post_shutdown).build()
     application.bot_data["lingualeo_client"] = client
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_word_handler))
 
+    # run_polling() manages its own event loop and will handle async operations
     application.run_polling()
 
 

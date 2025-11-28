@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-import requests
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -70,29 +70,28 @@ def parse_cookie_string(raw: str) -> dict[str, str]:
     return cookies
 
 
-def _load_cookie_file(path: Path) -> requests.cookies.RequestsCookieJar:
-    jar = requests.cookies.RequestsCookieJar()
+def _load_cookie_file(path: Path) -> dict[str, str]:
+    cookies: dict[str, str] = {}
     if not path or not path.exists():
-        return jar
+        return cookies
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return jar
+        return cookies
     if isinstance(data, dict):
-        for name, value in data.items():
-            jar.set(name, value)
-    return jar
+        cookies.update(data)
+    return cookies
 
 
-def _save_cookie_file(path: Path, jar: requests.cookies.RequestsCookieJar) -> None:
+def _save_cookie_file(path: Path, cookies: dict[str, str]) -> None:
     if not path:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(jar.get_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(cookies, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def describe_request_error(exc: requests.RequestException) -> str:
-    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+def describe_request_error(exc: httpx.HTTPStatusError | httpx.RequestError) -> str:
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
         return f"{exc} → {exc.response.text}"
     return str(exc)
 
@@ -143,36 +142,99 @@ class LinguaLeoClient:
                 "Set LINGUALEO_EMAIL and LINGUALEO_PASSWORD environment variables."
             )
 
-        self.session = requests.Session()
+        self.client: httpx.AsyncClient | None = None
         self.headers = BASE_HEADERS.copy()
         self.auth_headers = AUTH_HEADERS.copy()
         self.cookie_file = Path(cookie_file) if cookie_file else COOKIE_CACHE_DEFAULT
         self.email = email
         self.password = password
+        self._cookies: dict[str, str] = {}
 
         if cookie_string:
-            self.session.cookies.update(parse_cookie_string(cookie_string))
-        self.session.cookies.update(_load_cookie_file(self.cookie_file))
+            self._cookies.update(parse_cookie_string(cookie_string))
+        self._cookies.update(_load_cookie_file(self.cookie_file))
 
-    def ensure_authenticated(self) -> None:
-        if not self.session.cookies.get_dict():
-            self.login()
+    async def __aenter__(self):
+        """Async context manager entry."""
+        await self._ensure_client()
+        return self
 
-    def login(self) -> None:
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        await self.close()
+
+    async def close(self) -> None:
+        """Close the HTTP client."""
+        if self.client:
+            await self.client.aclose()
+            self.client = None
+
+    async def _ensure_client(self) -> None:
+        """Ensure the HTTP client is initialized."""
+        if self.client is None:
+            self.client = httpx.AsyncClient(
+                cookies=self._cookies,
+                timeout=15.0,
+                follow_redirects=True,
+            )
+            # Ensure cookies are synced
+            self._sync_cookies_to_client()
+
+    async def ensure_authenticated(self) -> None:
+        await self._ensure_client()
+        # Check if we have any meaningful cookies (not just empty dict)
+        # If no cookies or cookies seem invalid, login
+        logger.debug(f"[CLIENT] ensure_authenticated: cookies count={len(self._cookies)}")
+        if not self._cookies:
+            logger.info("[CLIENT] No cookies found, logging in...")
+            await self.login()
+        else:
+            # Sync cookies to client in case they were updated
+            logger.debug(f"[CLIENT] Cookies found, syncing to client: {list(self._cookies.keys())}")
+            self._sync_cookies_to_client()
+
+    async def login(self) -> None:
+        await self._ensure_client()
         if not self.email or not self.password:
             raise LinguaLeoError("Missing LinguaLeo credentials for login.")
         payload = {"type": "mixed", "credentials": {"email": self.email, "password": self.password}}
-        response = self.session.post(AUTH_URL, json=payload, headers=self.auth_headers, timeout=15)
+        response = await self.client.post(AUTH_URL, json=payload, headers=self.auth_headers)
         response.raise_for_status()
-        _save_cookie_file(self.cookie_file, self.session.cookies)
+        # Update cookies from response - httpx stores cookies in client.cookies
+        self._sync_cookies_from_client()
+        _save_cookie_file(self.cookie_file, self._cookies)
 
-    def _call_get_translates(self, word: str) -> dict[str, Any]:
+    def _sync_cookies_from_client(self) -> None:
+        """Sync cookies from httpx client to internal _cookies dict."""
+        if self.client:
+            # httpx.Cookies - iterate and extract values
+            # Cookies can be accessed directly as dict-like or via .get()
+            for name in self.client.cookies:
+                cookie_value = self.client.cookies.get(name)
+                if cookie_value:
+                    # If it's a Cookie object, get the value, otherwise it's already a string
+                    if hasattr(cookie_value, "value"):
+                        self._cookies[name] = cookie_value.value
+                    else:
+                        self._cookies[name] = str(cookie_value)
+
+    def _sync_cookies_to_client(self) -> None:
+        """Sync cookies from internal _cookies dict to httpx client."""
+        if self.client:
+            # Clear and update client cookies
+            self.client.cookies.clear()
+            self.client.cookies.update(self._cookies)
+
+    async def _call_get_translates(self, word: str) -> dict[str, Any]:
+        await self._ensure_client()
         payload = {"apiVersion": "1.0.1", "text": word, "iDs": []}
-        response = self.session.post(GET_TRANSLATES_URL, json=payload, headers=self.headers, timeout=15)
+        response = await self.client.post(GET_TRANSLATES_URL, json=payload, headers=self.headers)
         response.raise_for_status()
+        # Sync cookies after request
+        self._sync_cookies_from_client()
         return response.json()
 
-    def _call_get_words(self, word: str, word_set_id: int = 1) -> dict[str, Any]:
+    async def _call_get_words(self, word: str, word_set_id: int = 1) -> dict[str, Any]:
         """Search for a word in the dictionary."""
         # Generate simple tracking IDs (similar to what browser sends)
         timestamp = int(time.time() * 1000)
@@ -226,15 +288,18 @@ class LinguaLeoClient:
             }
         )
         logger.debug(f"[API] GetWords payload: {json.dumps(payload, indent=2, ensure_ascii=False)}")
-        response = self.session.post(GET_WORDS_URL, json=payload, headers=headers, timeout=15)
+        await self._ensure_client()
+        response = await self.client.post(GET_WORDS_URL, json=payload, headers=headers)
         response.raise_for_status()
+        # Sync cookies after request
+        self._sync_cookies_from_client()
         result = response.json()
         logger.debug(
             f"[API] GetWords response status: {result.get('status')}, data groups: {len(result.get('data', []))}"
         )
         return result
 
-    def _call_set_words(
+    async def _call_set_words(
         self,
         word: str,
         translation: dict[str, Any],
@@ -264,30 +329,33 @@ class LinguaLeoClient:
             "userData": {"nativeLanguage": "lang_id_src"},
             "iDs": [],
         }
-        response = self.session.post(SET_WORDS_URL, json=payload, headers=self.headers, timeout=15)
+        await self._ensure_client()
+        response = await self.client.post(SET_WORDS_URL, json=payload, headers=self.headers)
         response.raise_for_status()
+        # Sync cookies after request
+        self._sync_cookies_from_client()
         return response.json()
 
-    def _with_reauth(self, func, *args, **kwargs):
+    async def _with_reauth(self, func, *args, **kwargs):
         try:
-            return func(*args, **kwargs)
-        except requests.HTTPError as exc:
+            return await func(*args, **kwargs)
+        except httpx.HTTPStatusError as exc:
             status = exc.response.status_code if exc.response is not None else None
             if not _should_reauth(status):
                 raise
-            self.login()
-            return func(*args, **kwargs)
+            await self.login()
+            return await func(*args, **kwargs)
 
-    def get_translates(self, word: str) -> dict[str, Any]:
-        self.ensure_authenticated()
-        return self._with_reauth(self._call_get_translates, word)
+    async def get_translates(self, word: str) -> dict[str, Any]:
+        await self.ensure_authenticated()
+        return await self._with_reauth(self._call_get_translates, word)
 
-    def word_exists(self, word: str, word_set_id: int = 1) -> bool:
+    async def word_exists(self, word: str, word_set_id: int = 1) -> bool:
         """Check if a word already exists in the dictionary."""
-        self.ensure_authenticated()
+        await self.ensure_authenticated()
         try:
             logger.info(f"Checking if word '{word}' exists in word_set_id={word_set_id}")
-            response = self._with_reauth(self._call_get_words, word, word_set_id)
+            response = await self._with_reauth(self._call_get_words, word, word_set_id)
 
             # Debug: log the response structure
             logger.info(f"GetWords API response status: {response.get('status')}")
@@ -345,9 +413,9 @@ class LinguaLeoClient:
 
             logger.info(f"✗ Word '{word}' NOT found in any groups")
             return False
-        except requests.RequestException as exc:
+        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
             logger.error(f"Request error while checking if word '{word}' exists: {exc}")
-            if hasattr(exc, "response") and exc.response is not None:
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
                 logger.error(f"Response status: {exc.response.status_code}")
                 logger.error(f"Response text: {exc.response.text[:500]}")
             # Return False but log the error so we can debug
@@ -359,16 +427,16 @@ class LinguaLeoClient:
             logger.error(f"Unexpected error while checking if word '{word}' exists: {exc}", exc_info=True)
             return False
 
-    def add_word(
+    async def add_word(
         self,
         word: str,
         translation: dict[str, Any],
         word_set_id: int = 1,
     ) -> dict[str, Any]:
-        self.ensure_authenticated()
-        return self._with_reauth(self._call_set_words, word, translation, word_set_id)
+        await self.ensure_authenticated()
+        return await self._with_reauth(self._call_set_words, word, translation, word_set_id)
 
-    def add_word_with_hint(
+    async def add_word_with_hint(
         self,
         word: str,
         translation_hint: str | None,
@@ -377,7 +445,7 @@ class LinguaLeoClient:
         # Check if word already exists before trying to add
         logger.info(f"[CLIENT] add_word_with_hint called for word='{word}', word_set_id={word_set_id}")
         logger.info(f"[CLIENT] Checking if word '{word}' exists...")
-        exists = self.word_exists(word, word_set_id)
+        exists = await self.word_exists(word, word_set_id)
         logger.info(f"[CLIENT] word_exists returned: {exists} for word '{word}'")
         if exists:
             logger.warning(f"[CLIENT] Word '{word}' already exists - raising error to prevent duplicate")
@@ -385,7 +453,7 @@ class LinguaLeoClient:
 
         logger.info(f"[CLIENT] Word '{word}' does not exist - proceeding to add")
 
-        translate_payload = self.get_translates(word)
+        translate_payload = await self.get_translates(word)
         candidates = translate_payload.get("translate") or translate_payload.get("translations") or []
         match = select_best_translation(candidates, translation_hint)
         auto_selected = False
@@ -398,6 +466,8 @@ class LinguaLeoClient:
                     raise LinguaLeoError("No translation candidates returned by LinguaLeo.")
                 raise LinguaLeoError("Could not match translation to any candidate.")
 
-        response = self.add_word(word, match, word_set_id)
-        _save_cookie_file(self.cookie_file, self.session.cookies)
+        response = await self.add_word(word, match, word_set_id)
+        # Update cookies from client after request
+        self._sync_cookies_from_client()
+        _save_cookie_file(self.cookie_file, self._cookies)
         return AddWordResult(response=response, translation_used=match, auto_selected=auto_selected)
