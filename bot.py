@@ -114,7 +114,8 @@ async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not message or not message.text:
         return
 
-    if message.from_user.id != TELEGRAM_AUTHORIZED_USER_ID:
+    authorized_user_id = int(os.getenv("TELEGRAM_AUTHORIZED_USER_ID", "0"))
+    if authorized_user_id and message.from_user.id != authorized_user_id:
         logger.debug("Ignoring message from non-authorized user")
         return
 
