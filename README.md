@@ -8,6 +8,7 @@ Utilities and bots for importing words into LinguaLeo vocabulary.
 - **Bulk Import Script**: Import words from JSON files
 - **Automatic Authentication**: Handles login and cookie caching automatically
 - **Smart Translation Matching**: Automatically selects the best translation from LinguaLeo suggestions
+- **Duplicate Prevention**: Automatically checks if a word already exists before adding it, preventing duplicates
 
 ## Project Structure
 
@@ -114,9 +115,14 @@ palabra3
 ```
 
 The bot will:
+- **Check if the word already exists** in your dictionary before adding it
 - Automatically select the best translation if you provide a hint
 - Use the first LinguaLeo suggestion if no translation is provided
 - Process all words in bulk and provide a summary
+
+**If a word already exists:**
+- Single word: Bot responds with "Слово 'X' уже есть в словаре" (Word 'X' already exists in dictionary)
+- Bulk import: Words that already exist are listed in a separate "Уже есть" (Already exists) section in the summary
 
 ### Running the Import Script
 
@@ -207,15 +213,58 @@ Run with:
 docker-compose up -d
 ```
 
+### Systemd Service (Production)
+
+For production deployment on a VDS, you can use the provided systemd service file:
+
+1. Copy the service file:
+```bash
+sudo cp lingualeo-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable lingualeo-bot.service
+```
+
+2. The service automatically:
+   - Pulls latest code from git
+   - Rebuilds Docker containers
+   - Restarts the bot
+
+3. Manage the service:
+```bash
+sudo systemctl start lingualeo-bot.service
+sudo systemctl stop lingualeo-bot.service
+sudo systemctl restart lingualeo-bot.service
+sudo systemctl status lingualeo-bot.service
+```
+
+### GitHub Actions Deployment
+
+The repository includes a GitHub Actions workflow for one-click deployment to your VDS.
+
+**Setup:**
+1. Create an SSH key on your VDS for GitHub Actions
+2. Add GitHub Secrets: `VDS_HOST`, `VDS_USER`, `VDS_SSH_KEY`, `VDS_SSH_PORT` (optional)
+3. See `DEPLOYMENT.md` for detailed setup instructions
+
+**Deploy:**
+1. Go to **Actions** tab in GitHub
+2. Select **"Deploy Bot to VDS"** workflow
+3. Click **"Run workflow"** button
+4. Select branch and deploy
+
+The workflow will automatically pull the latest code and restart the bot on your VDS.
+
 ## How It Works
 
 1. **Authentication**: The client automatically handles LinguaLeo login using your credentials. Cookies are cached in `lingualeo_cookies.json` and refreshed when they expire.
 
-2. **Translation Selection**: 
+2. **Duplicate Check**: Before adding a word, the bot queries the LinguaLeo API to check if the word already exists in your dictionary. If found, the word is skipped to prevent duplicates.
+
+3. **Translation Selection**: 
    - If you provide a translation hint, the script finds the closest match from LinguaLeo's suggestions
    - If no hint is provided, it uses the first suggestion automatically
 
-3. **Word Addition**: Selected translations are added to your LinguaLeo dictionary via the API.
+4. **Word Addition**: Selected translations are added to your LinguaLeo dictionary via the API.
 
 ## Troubleshooting
 
