@@ -15,7 +15,6 @@ Utilities and bots for importing words into LinguaLeo vocabulary.
 ```
 .
 ├── bot.py                 # Telegram bot entry point
-├── import_words.py        # CLI script for bulk JSON imports
 ├── lingualeo/            # Reusable LinguaLeo client module
 │   ├── __init__.py
 │   └── client.py
@@ -124,46 +123,6 @@ The bot will:
 - Single word: Bot responds with "Слово 'X' уже есть в словаре" (Word 'X' already exists in dictionary)
 - Bulk import: Words that already exist are listed in a separate "Уже есть" (Already exists) section in the summary
 
-### Running the Import Script
-
-Import words from a JSON file:
-
-```bash
-# Basic usage
-uv run python import_words.py data/words/sample_words.json
-
-# With custom word set ID
-uv run python import_words.py data/words/sample_words.json --word-set-id 2
-
-# With custom credentials
-uv run python import_words.py data/words/sample_words.json \
-    --email your@email.com \
-    --password yourpassword
-```
-
-#### JSON Format
-
-The JSON file should contain an array of word objects:
-
-```json
-[
-  {
-    "word": "palabra",
-    "translation": "слово"
-  },
-  {
-    "word": "otra",
-    "translation": "другая"
-  },
-  {
-    "word": "sin_traduccion"
-  }
-]
-```
-
-- `word` (required): The Spanish word to add
-- `translation` (optional): Preferred Russian translation. If omitted, the script will use the first suggestion from LinguaLeo.
-
 ## Docker Deployment
 
 ### Building the Image
@@ -182,13 +141,6 @@ docker run -d \
   -v $(pwd)/lingualeo_cookies.json:/app/lingualeo_cookies.json \
   lignualeo-bot
 
-# Or run the import script
-docker run --rm \
-  --env-file .env \
-  -v $(pwd)/data:/app/data \
-  -v $(pwd)/lingualeo_cookies.json:/app/lingualeo_cookies.json \
-  lignualeo-bot \
-  uv run python import_words.py /app/data/words/sample_words.json
 ```
 
 ### Docker Compose (Optional)
@@ -292,9 +244,8 @@ This project uses [uv](https://github.com/astral-sh/uv) for dependency managemen
 # Install dependencies
 uv sync
 
-# Run scripts
+# Run the bot
 uv run python bot.py
-uv run python import_words.py data/words/sample_words.json
 ```
 
 ### Adding Dependencies
