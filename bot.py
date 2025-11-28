@@ -77,7 +77,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def process_single_word(
-    client: LinguaLeoClient, word: str, hint: str | None
+    client: LinguaLeoClient,
+    word: str,
+    hint: str | None,
 ) -> tuple[bool, str, str | None, bool, str | None]:
     """
     Process a single word and return (success, word, translation_text, auto_selected, status_message).

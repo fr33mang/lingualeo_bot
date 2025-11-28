@@ -234,7 +234,12 @@ class LinguaLeoClient:
         )
         return result
 
-    def _call_set_words(self, word: str, translation: dict[str, Any], word_set_id: int) -> dict[str, Any]:
+    def _call_set_words(
+        self,
+        word: str,
+        translation: dict[str, Any],
+        word_set_id: int,
+    ) -> dict[str, Any]:
         translation_block = {
             "id": translation["id"],
             "tr": translation.get("value") or translation.get("tr"),
@@ -354,7 +359,12 @@ class LinguaLeoClient:
             logger.error(f"Unexpected error while checking if word '{word}' exists: {exc}", exc_info=True)
             return False
 
-    def add_word(self, word: str, translation: dict[str, Any], word_set_id: int = 1) -> dict[str, Any]:
+    def add_word(
+        self,
+        word: str,
+        translation: dict[str, Any],
+        word_set_id: int = 1,
+    ) -> dict[str, Any]:
         self.ensure_authenticated()
         return self._with_reauth(self._call_set_words, word, translation, word_set_id)
 
