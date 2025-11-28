@@ -28,7 +28,32 @@ Add these secrets:
 - **`VDS_SSH_KEY`**: The **private** key content from `~/.ssh/github_actions_deploy` (the entire content including `-----BEGIN` and `-----END` lines)
 - **`VDS_SSH_PORT`**: SSH port (optional, defaults to 22 if not set)
 
-### 3. Setup Systemd Service on VDS
+### 3. Configure Sudo Access for Deployment User
+
+The `gordon` user needs passwordless sudo access to restart the systemd service. Configure this on your VDS:
+
+```bash
+# On your VDS, as root or with sudo
+sudo visudo
+```
+
+Add this line at the end of the file (replace `gordon` with your username if different):
+
+```
+gordon ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart lingualeo-bot.service, /usr/bin/systemctl status lingualeo-bot.service
+```
+
+This allows the `gordon` user to run only these specific systemctl commands without a password, which is more secure than full sudo access.
+
+**Alternative (more restrictive)**: If you want to be even more specific, you can restrict it to only the restart command:
+
+```
+gordon ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart lingualeo-bot.service
+```
+
+Save and exit (in `visudo`: press `Esc`, type `:wq`, press `Enter`).
+
+### 4. Setup Systemd Service on VDS
 
 Copy the service file to systemd:
 
@@ -38,7 +63,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable lingualeo-bot.service
 ```
 
-### 4. Deploy
+### 5. Deploy
 
 1. Go to your GitHub repository
 2. Click on "Actions" tab
@@ -68,6 +93,26 @@ command="cd /home/gordon/coding/lingualeo_bot && git pull && sudo systemctl rest
 ```
 
 ## Troubleshooting
+
+### Sudo Permission Denied
+
+If you see "sudo: a password is required" errors:
+
+1. Verify sudoers configuration:
+   ```bash
+   sudo visudo -c  # Check syntax
+   sudo cat /etc/sudoers.d/gordon  # If you created a separate file
+   ```
+
+2. Test sudo access manually:
+   ```bash
+   sudo -l  # List allowed commands for current user
+   sudo systemctl restart lingualeo-bot.service  # Test the command
+   ```
+
+3. Make sure the command path matches exactly what's in sudoers (use `which systemctl` to check)
+
+### Other Issues
 
 - Check GitHub Actions logs if deployment fails
 - Verify SSH key has correct permissions: `chmod 600 ~/.ssh/github_actions_deploy`
