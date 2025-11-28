@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: lignualeo-bot
+    env_file: .env
+    volumes:
+      # Persist cookie cache between restarts
+      - ./lingualeo_cookies.json:/app/lingualeo_cookies.json
+    restart: unless-stopped
+    # Uncomment to see logs
+    # logging:
+    #   driver: "json-file"
+    #   options:
+    #     max-size: "10m"
+    #     max-file: "3"
+
