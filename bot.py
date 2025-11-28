@@ -81,15 +81,32 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def process_single_word(
     client: LinguaLeoClient, word: str, hint: Optional[str]
-) -> Tuple[bool, str, Optional[str], bool]:
-    """Process a single word and return (success, word, translation_text, auto_selected)."""
+) -> Tuple[bool, str, Optional[str], bool, Optional[str]]:
+    """
+    Process a single word and return (success, word, translation_text, auto_selected, status_message).
+    status_message: None if added, "exists" if already exists, "error" if failed.
+    """
+    logger.info(f"[BOT] Processing word: '{word}' (hint: {hint})")
     try:
+        logger.info(f"[BOT] Calling add_word_with_hint for '{word}'")
         result = client.add_word_with_hint(word, hint)
+        logger.info(f"[BOT] Successfully added word '{word}'")
         translation_text = result.translation_used.get("value") or result.translation_used.get("tr")
-        return True, word, translation_text, result.auto_selected
-    except (LinguaLeoError, requests.RequestException) as exc:
-        logger.exception(f"Failed to add word '{word}': {exc}")
-        return False, word, None, False
+        return True, word, translation_text, result.auto_selected, None
+    except LinguaLeoError as exc:
+        error_msg = str(exc)
+        logger.info(f"[BOT] LinguaLeoError for '{word}': {error_msg}")
+        if "already exists" in error_msg.lower():
+            logger.info(f"[BOT] ✓ Word '{word}' already exists in dictionary - preventing duplicate")
+            return False, word, None, False, "exists"
+        logger.exception(f"[BOT] Failed to add word '{word}': {exc}")
+        return False, word, None, False, "error"
+    except requests.RequestException as exc:
+        logger.exception(f"[BOT] RequestException for word '{word}': {exc}")
+        return False, word, None, False, "error"
+    except Exception as exc:
+        logger.exception(f"[BOT] Unexpected exception for word '{word}': {exc}")
+        return False, word, None, False, "error"
 
 
 async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -98,11 +115,12 @@ async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     if message.from_user.id != TELEGRAM_AUTHORIZED_USER_ID:
-        print("Ignoring message from non-authorized user")
+        logger.debug("Ignoring message from non-authorized user")
         return
 
     client: LinguaLeoClient = context.application.bot_data["lingualeo_client"]
     text = message.text.strip()
+    logger.info(f"[BOT] Received message from user {message.from_user.id}: '{text[:50]}...'")
 
     # Check if this is a bulk import (multiple lines)
     lines = [line.strip() for line in text.split("\n") if line.strip()]
@@ -114,25 +132,33 @@ async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
 
         # Process all words
+        logger.info(f"[BOT] Bulk import mode - processing {len(words_data)} words")
         results = []
-        for word, hint in words_data:
+        for idx, (word, hint) in enumerate(words_data):
             if not word:
                 continue
-            success, processed_word, translation, _ = await process_single_word(client, word, hint)
-            results.append((success, processed_word, translation))
+            logger.info(f"[BOT] Processing word {idx+1}/{len(words_data)}: '{word}'")
+            success, processed_word, translation, _, status = await process_single_word(client, word, hint)
+            logger.info(f"[BOT] Word {idx+1} result: success={success}, status={status}")
+            results.append((success, processed_word, translation, status))
 
         # Build summary
         successful = [r for r in results if r[0]]
-        failed = [r for r in results if not r[0]]
+        already_exists = [r for r in results if not r[0] and r[3] == "exists"]
+        failed = [r for r in results if not r[0] and r[3] == "error"]
 
         summary_parts = [f"Обработано: {len(successful)}/{len(results)}"]
         if successful:
             summary_parts.append("\n<b>Добавлено:</b>")
-            for success, word, trans in successful:
+            for success, word, trans, _ in successful:
                 summary_parts.append(f"  • {word} → {trans}")
+        if already_exists:
+            summary_parts.append(f"\n<b>Уже есть ({len(already_exists)}):</b>")
+            for success, word, trans, _ in already_exists:
+                summary_parts.append(f"  • {word}")
         if failed:
             summary_parts.append(f"\n<b>Ошибки ({len(failed)}):</b>")
-            for success, word, trans in failed:
+            for success, word, trans, _ in failed:
                 summary_parts.append(f"  • {word}")
 
         await message.reply_html("\n".join(summary_parts), disable_web_page_preview=True)
@@ -140,13 +166,22 @@ async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Single word mode
     word, hint = parse_message_text(text)
+    logger.info(f"[BOT] Single word mode - parsed: word='{word}', hint='{hint}'")
     if not word:
         await message.reply_text("Пожалуйста, отправь слово.")
         return
 
-    success, processed_word, translation_text, auto_selected = await process_single_word(client, word, hint)
+    logger.info(f"[BOT] Starting to process single word: '{word}'")
+    success, processed_word, translation_text, auto_selected, status = await process_single_word(client, word, hint)
+    logger.info(f"[BOT] Process result: success={success}, status={status}, word='{processed_word}'")
+    
     if not success:
-        await message.reply_text(f"Не удалось добавить слово '{word}'.")
+        if status == "exists":
+            logger.info(f"[BOT] Sending 'already exists' message for '{word}'")
+            await message.reply_text(f"Слово '<b>{word}</b>' уже есть в словаре.", parse_mode="HTML")
+        else:
+            logger.warning(f"[BOT] Sending error message for '{word}' (status: {status})")
+            await message.reply_text(f"Не удалось добавить слово '{word}'.")
         return
 
     extra = ""
@@ -160,7 +195,15 @@ async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+        ]
+    )
+    # Also set logging level for lingualeo.client
+    logging.getLogger('lingualeo.client').setLevel(logging.INFO)
     token = os.environ.get("TELEGRAM_TOKEN")
     if not token:
         raise SystemExit("TELEGRAM_TOKEN env variable is required.")
