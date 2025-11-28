@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Utilities and bots for importing words into LinguaLeo."
 readme = "README.md"
 requires-python = ">=3.14"
+license = {text = "MIT"}
 dependencies = [
     "requests>=2.32",
     "python-telegram-bot>=21.6",
