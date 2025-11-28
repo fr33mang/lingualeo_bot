@@ -32,8 +32,13 @@ extend-exclude = '''
 )/
 '''
 
+[tool.isort]
+profile = "black"
+line_length = 120
+
 [dependency-groups]
 dev = [
     "black>=25.11.0",
+    "isort>=7.0.0",
     "pre-commit>=4.5.0",
 ]
