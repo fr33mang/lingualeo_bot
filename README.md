@@ -260,7 +260,7 @@ The workflow will automatically pull the latest code and restart the bot on your
 
 2. **Duplicate Check**: Before adding a word, the bot queries the LinguaLeo API to check if the word already exists in your dictionary. If found, the word is skipped to prevent duplicates.
 
-3. **Translation Selection**: 
+3. **Translation Selection**:
    - If you provide a translation hint, the script finds the closest match from LinguaLeo's suggestions
    - If no hint is provided, it uses the first suggestion automatically
 
@@ -310,4 +310,3 @@ uv add --dev package-name
 ## License
 
 [Add your license here]
-

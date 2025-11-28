@@ -21,4 +21,3 @@ ENV PYTHONUNBUFFERED=1
 
 # Default to running the bot
 CMD ["uv", "run", "python", "bot.py"]
-
