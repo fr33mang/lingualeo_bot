@@ -1,4 +1,4 @@
-# LinguaLeo Scripts
+# LinguaLeo Bot
 
 Utilities and bots for importing words into LinguaLeo vocabulary.
 
