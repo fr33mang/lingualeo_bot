@@ -118,4 +118,3 @@ If you see "sudo: a password is required" errors:
 - Verify SSH key has correct permissions: `chmod 600 ~/.ssh/github_actions_deploy`
 - Test SSH connection manually: `ssh -i ~/.ssh/github_actions_deploy user@host`
 - Check systemd logs: `sudo journalctl -u lingualeo-bot.service -f`
-

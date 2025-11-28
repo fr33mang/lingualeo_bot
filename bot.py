@@ -174,7 +174,7 @@ async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     logger.info(f"[BOT] Starting to process single word: '{word}'")
     success, processed_word, translation_text, auto_selected, status = await process_single_word(client, word, hint)
     logger.info(f"[BOT] Process result: success={success}, status={status}, word='{processed_word}'")
-    
+
     if not success:
         if status == "exists":
             logger.info(f"[BOT] Sending 'already exists' message for '{word}'")
@@ -197,13 +197,13 @@ async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
             logging.StreamHandler(),
-        ]
+        ],
     )
     # Also set logging level for lingualeo.client
-    logging.getLogger('lingualeo.client').setLevel(logging.INFO)
+    logging.getLogger("lingualeo.client").setLevel(logging.INFO)
     token = os.environ.get("TELEGRAM_TOKEN")
     if not token:
         raise SystemExit("TELEGRAM_TOKEN env variable is required.")
@@ -224,4 +224,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

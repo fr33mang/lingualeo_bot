@@ -6,4 +6,3 @@ from .client import (
 )
 
 __all__ = ["LinguaLeoClient", "LinguaLeoError"]
-

@@ -45,4 +45,3 @@ docker-compose.yml
 # Other
 *.json
 !uv.lock
-
