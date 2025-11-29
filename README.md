@@ -6,8 +6,10 @@ Utilities and bots for importing words into LinguaLeo vocabulary.
 
 - **Telegram Bot**: Add Spanish words to your LinguaLeo dictionary via Telegram chat
 - **Automatic Authentication**: Handles login and cookie caching automatically
-- **Smart Translation Matching**: Automatically selects the best translation from LinguaLeo suggestions
-- **Duplicate Prevention**: Automatically checks if a word already exists before adding it, preventing duplicates
+- **Smart Translation Matching**: Automatically selects the best translation from LinguaLeo suggestions (80% similarity threshold)
+- **Multiple Translations Support**: Add different translations to the same word
+- **Custom Translations**: Add your own translations even if they're not in LinguaLeo's suggestions
+- **Smart Duplicate Prevention**: Prevents duplicate word-translation pairs while allowing new translations for existing words
 
 ## Project Structure
 
@@ -98,14 +100,18 @@ uv run python bot.py
 
 #### Adding Words
 
-**Single word:**
+**Single word (auto-select first translation):**
 ```
 palabra
 ```
 
-**Single word with translation:**
+**Single word with translation hint:**
 ```
 palabra — перевод
+```
+or
+```
+palabra - перевод
 ```
 
 **Bulk import (multiple words, one per line):**
@@ -115,15 +121,49 @@ palabra2 — перевод2
 palabra3
 ```
 
-The bot will:
-- **Check if the word already exists** in your dictionary before adding it
-- Automatically select the best translation if you provide a hint
-- Use the first LinguaLeo suggestion if no translation is provided
-- Process all words in bulk and provide a summary
+#### Translation Logic
 
-**If a word already exists:**
-- Single word: Bot responds with "Слово 'X' уже есть в словаре" (Word 'X' already exists in dictionary)
-- Bulk import: Words that already exist are listed in a separate "Уже есть" (Already exists) section in the summary
+The bot intelligently handles different scenarios:
+
+**1. New word without translation hint:**
+- Uses the first translation from LinguaLeo's suggestions
+
+**2. New word with translation hint:**
+- Searches for matching translation in LinguaLeo's suggestions (80% similarity threshold)
+- If found: uses the matching translation
+- If not found: creates a custom translation with your hint
+
+**3. Existing word without translation hint:**
+- Reports that the word already exists and shows current translations
+
+**4. Existing word with translation hint:**
+- If the translation already exists: reports that the word-translation pair already exists
+- If it's a new translation: adds the new translation to the existing word
+
+**Examples:**
+
+```
+# First time adding "medico"
+medico
+→ Adds with first LinguaLeo suggestion (e.g., "доктор")
+
+# Adding a different translation to "medico"
+medico - врач
+→ Adds "врач" as a new translation (if not already present)
+
+# Trying to add same translation again
+medico - доктор
+→ Reports: "Слово 'medico' with translation 'доктор' already exists"
+
+# Adding custom translation not in LinguaLeo's suggestions
+palabra - мой перевод
+→ Creates custom translation "мой перевод"
+```
+
+**Summary in bulk imports:**
+- **Добавлено** (Added): Successfully added word-translation pairs
+- **Уже есть** (Already exists): Word-translation pairs that were already in your dictionary
+- **Ошибки** (Errors): Failed to add due to errors
 
 ## Docker Deployment
 
@@ -212,13 +252,19 @@ The workflow will automatically pull the latest code and restart the bot on your
 
 1. **Authentication**: The client automatically handles LinguaLeo login using your credentials. Cookies are cached in `lingualeo_cookies.json` and refreshed when they expire.
 
-2. **Duplicate Check**: Before adding a word, the bot queries the LinguaLeo API to check if the word already exists in your dictionary. If found, the word is skipped to prevent duplicates.
+2. **Word Existence Check**: Before adding a word, the bot queries the LinguaLeo API to check if the word already exists and retrieves any existing translations.
 
 3. **Translation Selection**:
-   - If you provide a translation hint, the script finds the closest match from LinguaLeo's suggestions
-   - If no hint is provided, it uses the first suggestion automatically
+   - **With hint**: Searches for matching translation in LinguaLeo's suggestions using fuzzy matching (80% similarity threshold)
+   - **Without hint**: Uses the first suggestion from LinguaLeo automatically
+   - **Custom translations**: If your hint doesn't match any suggestion (< 80% similarity), creates a custom translation
 
-4. **Word Addition**: Selected translations are added to your LinguaLeo dictionary via the API.
+4. **Duplicate Prevention**:
+   - Prevents adding the same word-translation pair twice
+   - Allows adding different translations to existing words
+   - Shows existing translations when word already exists
+
+5. **Word Addition**: Selected translations are added to your LinguaLeo dictionary via the API.
 
 ## Troubleshooting
 
@@ -257,6 +303,24 @@ uv add package-name
 
 # Add a development dependency
 uv add --dev package-name
+```
+
+### Running Tests
+
+The project includes comprehensive test coverage:
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run with verbose output
+uv run pytest -v
+
+# Run specific test file
+uv run pytest tests/test_client.py
+
+# Run with coverage report
+uv run pytest --cov=lingualeo --cov-report=html
 ```
 
 ## License
