@@ -19,7 +19,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from lingualeo import LinguaLeoClient, LinguaLeoError
-from lingualeo.client import COOKIE_CACHE_DEFAULT
+from lingualeo.client import COOKIE_CACHE_DEFAULT, extract_existing_translations
 
 # Load environment variables from .env file
 load_dotenv()
@@ -79,10 +79,11 @@ async def process_single_word(
     client: LinguaLeoClient,
     word: str,
     hint: str | None,
-) -> tuple[bool, str, str | None, bool, str | None]:
+) -> tuple[bool, str, str | None, bool, str | None, list[str] | None]:
     """
-    Process a single word and return (success, word, translation_text, auto_selected, status_message).
+    Process a single word and return (success, word, translation_text, auto_selected, status_message, existing_translations).
     status_message: None if added, "exists" if already exists, "error" if failed.
+    existing_translations: list of existing translations if word exists, None otherwise.
     """
     logger.info(f"[BOT] Processing word: '{word}' (hint: {hint})")
     try:
@@ -90,18 +91,24 @@ async def process_single_word(
         result = await client.add_word_with_hint(word, hint)
         logger.info(f"[BOT] Successfully added word '{word}'")
         translation_text = result.translation_used.get("value") or result.translation_used.get("tr")
-        return True, word, translation_text, result.auto_selected, None
+        return True, word, translation_text, result.auto_selected, None, None
     except LinguaLeoError as exc:
         error_msg = str(exc)
         logger.info(f"[BOT] LinguaLeoError for '{word}': {error_msg}")
         if "already exists" in error_msg.lower():
             logger.info(f"[BOT] ✓ Word '{word}' already exists in dictionary - preventing duplicate")
-            return False, word, None, False, "exists"
+            # Try to get existing translations for better user feedback
+            try:
+                word_data = await client.get_word_data(word)
+                existing = extract_existing_translations(word_data) if word_data else None
+            except Exception:
+                existing = None
+            return False, word, None, False, "exists", existing
         logger.exception(f"[BOT] Failed to add word '{word}': {exc}")
-        return False, word, None, False, "error"
+        return False, word, None, False, "error", None
     except Exception as exc:
         logger.exception(f"[BOT] Unexpected exception for word '{word}': {exc}")
-        return False, word, None, False, "error"
+        return False, word, None, False, "error", None
 
 
 async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -134,9 +141,9 @@ async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if not word:
                 continue
             logger.info(f"[BOT] Processing word {idx+1}/{len(words_data)}: '{word}'")
-            success, processed_word, translation, _, status = await process_single_word(client, word, hint)
+            success, processed_word, translation, _, status, existing = await process_single_word(client, word, hint)
             logger.info(f"[BOT] Word {idx+1} result: success={success}, status={status}")
-            results.append((success, processed_word, translation, status))
+            results.append((success, processed_word, translation, status, existing))
 
         # Build summary
         successful = [r for r in results if r[0]]
@@ -146,15 +153,21 @@ async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         summary_parts = [f"Обработано: {len(successful)}/{len(results)}"]
         if successful:
             summary_parts.append("\n<b>Добавлено:</b>")
-            for success, word, trans, _ in successful:
+            for success, word, trans, _, _ in successful:
                 summary_parts.append(f"  • {word} → {trans}")
         if already_exists:
             summary_parts.append(f"\n<b>Уже есть ({len(already_exists)}):</b>")
-            for success, word, trans, _ in already_exists:
-                summary_parts.append(f"  • {word}")
+            for success, word, trans, _, existing in already_exists:
+                if existing:
+                    existing_text = ", ".join(existing[:3])  # Show first 3 translations
+                    if len(existing) > 3:
+                        existing_text += "..."
+                    summary_parts.append(f"  • {word} ({existing_text})")
+                else:
+                    summary_parts.append(f"  • {word}")
         if failed:
             summary_parts.append(f"\n<b>Ошибки ({len(failed)}):</b>")
-            for success, word, trans, _ in failed:
+            for success, word, trans, _, _ in failed:
                 summary_parts.append(f"  • {word}")
 
         await message.reply_html("\n".join(summary_parts), disable_web_page_preview=True)
@@ -168,13 +181,23 @@ async def add_word_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     logger.info(f"[BOT] Starting to process single word: '{word}'")
-    success, processed_word, translation_text, auto_selected, status = await process_single_word(client, word, hint)
+    success, processed_word, translation_text, auto_selected, status, existing = await process_single_word(
+        client, word, hint
+    )
     logger.info(f"[BOT] Process result: success={success}, status={status}, word='{processed_word}'")
 
     if not success:
         if status == "exists":
             logger.info(f"[BOT] Sending 'already exists' message for '{word}'")
-            await message.reply_text(f"Слово '<b>{word}</b>' уже есть в словаре.", parse_mode="HTML")
+            msg = f"Слово '<b>{word}</b>' уже есть в словаре."
+            if existing:
+                existing_text = ", ".join(existing[:5])  # Show first 5 translations
+                if len(existing) > 5:
+                    existing_text += "..."
+                msg += f"\nПереводы: {existing_text}"
+            if hint:
+                msg += f"\n\nЧтобы добавить другой перевод, используйте: {word} - [новый перевод]"
+            await message.reply_html(msg, disable_web_page_preview=True)
         else:
             logger.warning(f"[BOT] Sending error message for '{word}' (status: {status})")
             await message.reply_text(f"Не удалось добавить слово '{word}'.")

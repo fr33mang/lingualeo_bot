@@ -345,8 +345,10 @@ class TestLinguaLeoClientAPIMethods:
         assert mock_httpx_client.post.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_add_word_with_hint_word_exists(self, client_with_mock_httpx, mock_httpx_client, mock_httpx_response):
-        """Test add_word_with_hint raises error when word exists."""
+    async def test_add_word_with_hint_word_exists_no_hint(
+        self, client_with_mock_httpx, mock_httpx_client, mock_httpx_response
+    ):
+        """Test add_word_with_hint raises error when word exists and no hint provided."""
         words_response = mock_httpx_response(
             status_code=200,
             json_data=mock_get_words_response_word_exists("palabra"),
@@ -355,7 +357,102 @@ class TestLinguaLeoClientAPIMethods:
         client_with_mock_httpx._cookies = {"auth_token": "abc123"}
 
         with pytest.raises(LinguaLeoError, match="already exists"):
-            await client_with_mock_httpx.add_word_with_hint("palabra", "перевод")
+            await client_with_mock_httpx.add_word_with_hint("palabra", None)
+
+    @pytest.mark.asyncio
+    async def test_add_word_with_hint_word_exists_same_translation(
+        self, client_with_mock_httpx, mock_httpx_client, mock_httpx_response
+    ):
+        """Test add_word_with_hint raises error when word exists with same translation."""
+        words_response = mock_httpx_response(
+            status_code=200,
+            json_data=mock_get_words_response_word_exists("palabra"),
+        )
+        mock_httpx_client.post.return_value = words_response
+        client_with_mock_httpx._cookies = {"auth_token": "abc123"}
+
+        # The existing word has "слово" as translation
+        with pytest.raises(LinguaLeoError, match="already exists"):
+            await client_with_mock_httpx.add_word_with_hint("palabra", "слово")
+
+    @pytest.mark.asyncio
+    async def test_add_word_with_hint_word_exists_new_translation(
+        self, client_with_mock_httpx, mock_httpx_client, mock_httpx_response
+    ):
+        """Test add_word_with_hint adds new translation when word exists with different translation."""
+        words_response = mock_httpx_response(
+            status_code=200,
+            json_data=mock_get_words_response_word_exists("palabra"),
+        )
+        translates_response = mock_httpx_response(
+            status_code=200,
+            json_data=mock_get_translates_response(),
+        )
+        set_words_response = mock_httpx_response(
+            status_code=200,
+            json_data=mock_set_words_response("palabra", 1001),
+        )
+
+        async def mock_post(*args, **kwargs):
+            url = args[0] if args else kwargs.get("url", "")
+            if "GetWords" in url:
+                return words_response
+            elif "getTranslates" in url:
+                return translates_response
+            elif "SetWords" in url:
+                return set_words_response
+            return words_response
+
+        mock_httpx_client.post = AsyncMock(side_effect=mock_post)
+        client_with_mock_httpx._cookies = {"auth_token": "abc123"}
+
+        # The existing word has "слово" as translation, but we're adding "перевод"
+        result = await client_with_mock_httpx.add_word_with_hint("palabra", "перевод")
+
+        assert result.translation_used["value"] == "перевод"
+        assert result.auto_selected is False
+        # Should call GetWords, getTranslates, and SetWords
+        assert mock_httpx_client.post.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_add_word_with_hint_custom_translation(
+        self, client_with_mock_httpx, mock_httpx_client, mock_httpx_response
+    ):
+        """Test add_word_with_hint can add custom translation not in Lingualeo's suggestions."""
+        words_response = mock_httpx_response(
+            status_code=200,
+            json_data=mock_get_words_response_word_not_found(),
+        )
+        # Translation response doesn't contain our custom translation
+        translates_response = mock_httpx_response(
+            status_code=200,
+            json_data=mock_get_translates_response(),
+        )
+        set_words_response = mock_httpx_response(
+            status_code=200,
+            json_data=mock_set_words_response("palabra", 999999),
+        )
+
+        async def mock_post(*args, **kwargs):
+            url = args[0] if args else kwargs.get("url", "")
+            if "GetWords" in url:
+                return words_response
+            elif "getTranslates" in url:
+                return translates_response
+            elif "SetWords" in url:
+                return set_words_response
+            return words_response
+
+        mock_httpx_client.post = AsyncMock(side_effect=mock_post)
+        client_with_mock_httpx._cookies = {"auth_token": "abc123"}
+
+        # Add word with custom translation "кастомный" which is not in suggestions
+        result = await client_with_mock_httpx.add_word_with_hint("palabra", "кастомный")
+
+        assert result.translation_used["value"] == "кастомный"
+        assert result.auto_selected is False
+        # Should call GetWords, getTranslates, and SetWords
+        assert mock_httpx_client.post.call_count == 3
 
 
 class TestLinguaLeoClientErrorHandling:

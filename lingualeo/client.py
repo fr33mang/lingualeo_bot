@@ -97,7 +97,19 @@ def describe_request_error(exc: httpx.HTTPStatusError | httpx.RequestError) -> s
 def select_best_translation(
     candidates: Iterable[dict[str, Any]],
     desired: str | None,
+    threshold: float = 0.8,
 ) -> dict[str, Any] | None:
+    """
+    Select best matching translation from candidates.
+
+    Args:
+        candidates: List of translation candidates
+        desired: Desired translation text
+        threshold: Minimum similarity score (0.0-1.0) to consider a match. Default 0.8.
+
+    Returns:
+        Best matching candidate if similarity >= threshold, None otherwise
+    """
     if not desired:
         return None
     desired_lower = desired.lower()
@@ -111,7 +123,48 @@ def select_best_translation(
         if score > best_score:
             best = candidate
             best_score = score
-    return best
+
+    # Only return if score meets threshold
+    if best_score >= threshold:
+        logger.debug(f"Found matching translation with score {best_score:.2f}: {best}")
+        return best
+
+    logger.debug(f"Best match score {best_score:.2f} below threshold {threshold}, no match found")
+    return None
+
+
+def extract_existing_translations(word_data: dict[str, Any]) -> list[str]:
+    """Extract all existing translations from word data."""
+    translations = []
+
+    # Get from combinedTranslation field (semicolon-separated)
+    combined = word_data.get("combinedTranslation", "")
+    if combined:
+        translations.extend([t.strip() for t in combined.split(";") if t.strip()])
+
+    # Get from translations array if available
+    trans_list = word_data.get("translations") or []
+    for trans in trans_list:
+        text = trans.get("value") or trans.get("tr") or ""
+        if text and text.strip():
+            translations.append(text.strip())
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_translations = []
+    for t in translations:
+        t_lower = t.lower()
+        if t_lower not in seen:
+            seen.add(t_lower)
+            unique_translations.append(t)
+
+    return unique_translations
+
+
+def translation_exists(existing_translations: list[str], hint: str) -> bool:
+    """Check if a translation already exists in the list (case-insensitive)."""
+    hint_lower = hint.lower().strip()
+    return any(t.lower().strip() == hint_lower for t in existing_translations)
 
 
 def _should_reauth(status_code: int | None) -> bool:
@@ -348,8 +401,8 @@ class LinguaLeoClient:
         await self.ensure_authenticated()
         return await self._with_reauth(self._call_get_translates, word)
 
-    async def word_exists(self, word: str, word_set_id: int = 1) -> bool:
-        """Check if a word already exists in the dictionary."""
+    async def get_word_data(self, word: str, word_set_id: int = 1) -> dict[str, Any] | None:
+        """Get word data if it exists in the dictionary, or None if not found."""
         await self.ensure_authenticated()
         try:
             logger.info(f"Checking if word '{word}' exists in word_set_id={word_set_id}")
@@ -362,7 +415,7 @@ class LinguaLeoClient:
             # Check if word exists in the response
             if response.get("status") != "ok":
                 logger.warning(f"GetWords API returned non-ok status: {response.get('status')}")
-                return False
+                return None
 
             data = response.get("data", [])
             logger.info(f"Found {len(data)} data groups in response")
@@ -371,7 +424,7 @@ class LinguaLeoClient:
             if not data:
                 logger.info(f"No data groups found, word '{word}' does not exist")
                 logger.debug(f"Full API response: {json.dumps(response, indent=2, ensure_ascii=False)}")
-                return False
+                return None
 
             # Search through all groups and words
             word_lower = word.lower().strip()
@@ -407,23 +460,28 @@ class LinguaLeoClient:
                         logger.info(
                             f"✓ Word '{word}' FOUND in dictionary (matched '{word_value_raw}' via {matched_field})"
                         )
-                        return True
+                        return word_data
 
             logger.info(f"✗ Word '{word}' NOT found in any groups")
-            return False
+            return None
         except (httpx.HTTPStatusError, httpx.RequestError) as exc:
             logger.error(f"Request error while checking if word '{word}' exists: {exc}")
             if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
                 logger.error(f"Response status: {exc.response.status_code}")
                 logger.error(f"Response text: {exc.response.text[:500]}")
-            # Return False but log the error so we can debug
-            return False
+            # Return None but log the error so we can debug
+            return None
         except LinguaLeoError as exc:
             logger.error(f"LinguaLeo error while checking if word '{word}' exists: {exc}")
-            return False
+            return None
         except Exception as exc:
             logger.error(f"Unexpected error while checking if word '{word}' exists: {exc}", exc_info=True)
-            return False
+            return None
+
+    async def word_exists(self, word: str, word_set_id: int = 1) -> bool:
+        """Check if a word already exists in the dictionary."""
+        word_data = await self.get_word_data(word, word_set_id)
+        return word_data is not None
 
     async def add_word(
         self,
@@ -440,32 +498,89 @@ class LinguaLeoClient:
         translation_hint: str | None,
         word_set_id: int = 1,
     ) -> AddWordResult:
-        # Check if word already exists before trying to add
-        logger.info(f"[CLIENT] add_word_with_hint called for word='{word}', word_set_id={word_set_id}")
-        logger.info(f"[CLIENT] Checking if word '{word}' exists...")
-        exists = await self.word_exists(word, word_set_id)
-        logger.info(f"[CLIENT] word_exists returned: {exists} for word '{word}'")
-        if exists:
-            logger.warning(f"[CLIENT] Word '{word}' already exists - raising error to prevent duplicate")
-            raise LinguaLeoError(f"Word '{word}' already exists in dictionary")
+        """
+        Add a word with optional translation hint.
 
-        logger.info(f"[CLIENT] Word '{word}' does not exist - proceeding to add")
+        Logic:
+        - If word doesn't exist + no hint: take first suggestion from Lingualeo
+        - If word exists + (no hint OR hint matches existing): raise error (already exists)
+        - If word exists + hint provided + hint not in existing: add new translation
+        - If hint not in Lingualeo's suggestions: add as custom translation
+        """
+        logger.info(f"[CLIENT] add_word_with_hint called for word='{word}', hint='{translation_hint}'")
 
+        # Check if word already exists
+        word_data = await self.get_word_data(word, word_set_id)
+
+        if word_data:
+            logger.info(f"[CLIENT] Word '{word}' already exists in dictionary")
+            existing_translations = extract_existing_translations(word_data)
+            logger.info(f"[CLIENT] Existing translations: {existing_translations}")
+
+            # If no hint provided or hint matches existing translation
+            if not translation_hint:
+                logger.warning(f"[CLIENT] Word '{word}' exists and no hint provided")
+                raise LinguaLeoError(f"Word '{word}' already exists in dictionary")
+
+            if translation_exists(existing_translations, translation_hint):
+                logger.warning(f"[CLIENT] Word '{word}' already has translation '{translation_hint}'")
+                raise LinguaLeoError(f"Word '{word}' with translation '{translation_hint}' already exists")
+
+            # Word exists but translation is new - proceed to add new translation
+            logger.info(f"[CLIENT] Adding new translation '{translation_hint}' to existing word '{word}'")
+        else:
+            logger.info(f"[CLIENT] Word '{word}' does not exist - will add new word")
+
+        # Get translation candidates from Lingualeo
         translate_payload = await self.get_translates(word)
         candidates = translate_payload.get("translate") or translate_payload.get("translations") or []
-        match = select_best_translation(candidates, translation_hint)
+        logger.info(f"[CLIENT] Got {len(candidates)} translation candidates from Lingualeo")
+
+        match = None
         auto_selected = False
-        if not match:
-            if translation_hint is None and candidates:
+
+        if translation_hint:
+            # Try to find matching translation in candidates
+            match = select_best_translation(candidates, translation_hint)
+
+            if not match:
+                # Custom translation - not in Lingualeo's suggestions
+                logger.info(
+                    f"[CLIENT] Translation '{translation_hint}' not found in candidates, creating custom translation"
+                )
+
+                # Create a custom translation object
+                # We need at least an ID to make the API happy
+                # Use a high ID that's unlikely to conflict, or derive from hint
+                custom_id = hash(translation_hint) % (10**9)  # Simple hash-based ID
+                if custom_id < 0:
+                    custom_id = -custom_id
+
+                match = {
+                    "id": custom_id,
+                    "value": translation_hint,
+                    "tr": translation_hint,
+                    "main": 1,
+                    "selected": 1,
+                }
+                logger.info(f"[CLIENT] Created custom translation: {match}")
+        else:
+            # No hint - use first candidate if available
+            if candidates:
                 match = candidates[0]
                 auto_selected = True
+                logger.info(f"[CLIENT] No hint provided, auto-selected first candidate")
             else:
-                if not candidates:
-                    raise LinguaLeoError("No translation candidates returned by LinguaLeo.")
-                raise LinguaLeoError("Could not match translation to any candidate.")
+                raise LinguaLeoError("No translation candidates returned by LinguaLeo and no hint provided.")
 
+        if not match:
+            raise LinguaLeoError("Could not determine translation to add.")
+
+        logger.info(f"[CLIENT] Adding word '{word}' with translation: {match}")
         response = await self.add_word(word, match, word_set_id)
+
         # Update cookies from client after request
         self._sync_cookies_from_client()
         _save_cookie_file(self.cookie_file, self._cookies)
+
         return AddWordResult(response=response, translation_used=match, auto_selected=auto_selected)
